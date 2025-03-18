@@ -1,0 +1,98 @@
+# tests/test_main.py
+import pytest
+from fastapi.testclient import TestClient
+from main import app, GCPLOGGER, LogFactory, LogEntry, LogType
+from unittest.mock import patch
+import threading
+
+client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+def mock_env(monkeypatch):
+    """Mock environment variables"""
+    monkeypatch.setenv("GCP_LOGGER_NAME", "test-logs")
+
+@pytest.fixture
+def mock_gcp_logger():
+    """Mock GCP Logger Methods"""
+    with patch("main.GCPLOGGER.write_to_gcp") as mock_write, \
+         patch("main.GCPLOGGER.fetch_logs") as mock_fetch:
+        yield mock_write, mock_fetch
+
+# ✅ Integration Test - Ensures API endpoints work as expected
+def test_log_factory_create_log():
+    log_entry = LogFactory.create_log("INFO", "test-service", {"message": "test"})
+    assert isinstance(log_entry, LogEntry)
+    assert log_entry.log_type == LogType.INFO
+    assert log_entry.service_name == "test-service"
+    assert log_entry.data == {"message": "test"}
+
+def test_log_entry_api(mock_gcp_logger):
+    mock_write = mock_gcp_logger[0]
+    payload = {
+        "log_type": "INFO",
+        "service_name": "test-service",
+        "data": {"message": "test"}
+    }
+    response = client.post("/api/v1/log", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"message": "Log entry created successfully"}
+    mock_write.assert_called_once()
+
+# ✅ Load Testing - Simulates multiple requests to test system stability
+def test_load_logging_api(mock_gcp_logger):
+    """Simulate multiple concurrent requests to test system stability."""
+    num_requests = 10
+    errors = []
+
+    def send_request():
+        response = client.post("/api/v1/log", json={
+            "log_type": "INFO",
+            "service_name": "load-test-service",
+            "data": {"message": "Performance Test"}
+        })
+        if response.status_code != 200:
+            errors.append(response.status_code)
+
+    threads = []
+    for _ in range(num_requests):
+        thread = threading.Thread(target=send_request)
+        threads.append(thread)
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    assert len(errors) == 0, f"Some requests failed: {errors}"
+
+# ✅ Log Routing Test - Ensures logs are being routed correctly via GCP Log Sink
+def test_log_routing_gcp(mock_gcp_logger):
+    mock_fetch = mock_gcp_logger[1]
+    mock_fetch.return_value = {
+        "logs": [
+            {"log_type": "INFO", "service_name": "test-service", "message": "Routed to GCP"},
+            {"log_type": "ERROR", "service_name": "test-service", "message": "Error Logged"}
+        ]
+    }
+    
+    response = client.get("/api/v1/logs")
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert any(log["log_type"] == "INFO" for log in logs)
+    assert any(log["log_type"] == "ERROR" for log in logs)
+
+# ✅ Health Check Test - Ensures API is up and running
+def test_health_check(mock_gcp_logger):
+    mock_fetch = mock_gcp_logger[1]
+    mock_fetch.return_value = {"logs":[]}
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json() == {"message": "Logging Service is running and connected to GCP!"}
+
+def test_health_check_gcp_error(mock_gcp_logger):
+    mock_fetch = mock_gcp_logger[1]
+    mock_fetch.side_effect = Exception("GCP error")
+    response = client.get("/")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Error connecting to GCP"}
+
