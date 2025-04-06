@@ -1,0 +1,5 @@
+age=23
+if age>30:
+
+    print(age)
+    
