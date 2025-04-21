@@ -1,0 +1,56 @@
+## Releases
+
+[Version v0.1.36 – Chat Completions](#version-v0136--chat-completions--litellm-integration)  
+[Version v0.1.35 – Streaming Output Format](#version-v0135--streaming-output-format)
+
+---
+
+## Quick Navigation
+
+/Type `/table of contents` and select the macro  
+(Use it to auto-generate version links dynamically)
+
+
+## Version v0.1.36 – Chat Completions & LiteLLM Integration
+
+**Release Date:** April 18, 2025  
+**Sprint:** 25.2.1  
+**Author:** Ramakant Bhavane
+
+---
+
+### **Introduction**
+We are excited to introduce the new `/chat/completions` and `/embeddings` endpoints with LiteLLM integration. This enables more efficient handling of chat completions using advanced orchestration.
+
+---
+
+### **Objective**
+TBA
+
+---
+
+### **Key Highlights**
+- **PII Filtering:** Automatically filters personally identifiable information from responses.
+- **Streaming Functionality:** Adds support for real-time streamed responses.
+- **Cost Calculation:** Includes usage tracking and cost analytics.
+- **Logging:** Enhanced for performance analysis and debugging.
+
+---
+
+## Version v0.1.35 – Streaming Output Format
+
+**Release Date:** April 15, 2025  
+**Sprint:** 25.2.1  
+**Author:** Ramakant Bhavane
+
+---
+
+### **Introduction**
+This release focused on improvements to streaming response structure for APIs.
+
+---
+
+### **Key Highlights**
+- Modified streamed JSON formatting for better client compatibility.
+- Reduced initial response latency.
+- Improved error traceability in logs.
