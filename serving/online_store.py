@@ -98,31 +98,64 @@ class InMemoryOnlineStore(OnlineStore):
 
 
 class RedisOnlineStore(OnlineStore):
-    """Production store backed by Redis. Import is lazy so dev needs no Redis."""
+    """Production store backed by Redis (ElastiCache / Memorystore).
 
-    def __init__(self, url: str, key_prefix: str = "c360:feat:") -> None:
+    Built for a real deployment: a shared **connection pool** (pods don't
+    reconnect per request), **TLS**, bounded **socket timeouts** so a slow node
+    fails fast, and **retry** to ride out a Multi-AZ failover promotion. Import
+    is lazy so dev/test environments need no redis package.
+    """
+
+    def __init__(self, config: Optional["RedisConfig"] = None) -> None:  # noqa: F821
         super().__init__()
         import redis  # lazy
+        from redis.backoff import ExponentialBackoff
+        from redis.retry import Retry
 
-        self._client = redis.Redis.from_url(url, decode_responses=True)
-        self._prefix = key_prefix
+        from .config import redis_config as _default_config
+
+        cfg = config or _default_config
+        self._prefix = cfg.key_prefix
+        self._default_ttl = cfg.default_ttl_s
+
+        pool = redis.connection.ConnectionPool.from_url(
+            cfg.url(),
+            decode_responses=True,
+            max_connections=cfg.max_connections,
+            socket_timeout=cfg.socket_timeout_s,
+            socket_connect_timeout=cfg.socket_connect_timeout_s,
+            retry=Retry(ExponentialBackoff(cap=0.5, base=0.05), cfg.retries),
+            health_check_interval=30,
+        )
+        self._client = redis.Redis(connection_pool=pool)
 
     def _key(self, serial_no: str) -> str:
         return f"{self._prefix}{serial_no}"
+
+    def ping(self) -> bool:
+        """Liveness probe for readiness checks."""
+        try:
+            return bool(self._client.ping())
+        except Exception:  # pragma: no cover
+            log.warning("redis ping failed", exc_info=True)
+            return False
 
     def _get(self, serial_no: str) -> Optional[str]:
         return self._client.get(self._key(serial_no))
 
     def _set(self, serial_no: str, blob: str, ttl_s: Optional[int]) -> None:
-        self._client.set(self._key(serial_no), blob, ex=ttl_s)
+        self._client.set(self._key(serial_no), blob, ex=ttl_s or self._default_ttl)
 
     def bulk_put(self, records, ttl_s=None) -> int:  # pipelined for throughput
-        pipe = self._client.pipeline()
+        ttl = ttl_s or self._default_ttl
+        pipe = self._client.pipeline(transaction=False)
         n = 0
         for serial_no, record in records:
-            key = self._key(str(serial_no))
-            pipe.set(key, json.dumps(dict(record), default=str), ex=ttl_s)
+            pipe.set(self._key(str(serial_no)), json.dumps(dict(record), default=str), ex=ttl)
             n += 1
+            if n % 1000 == 0:  # flush in chunks to bound memory
+                pipe.execute()
+                pipe = self._client.pipeline(transaction=False)
         pipe.execute()
         self.stats.writes += n
         return n
